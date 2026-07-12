@@ -1,0 +1,17 @@
+{
+  "worldId": "LUMEN-WORLD-001",
+  "title": "Архитектор: Первый Порог",
+  "version": "0.1.0",
+  "startLocationId": "threshold-hall",
+  "initialStatePath": "world/state.initial.json",
+  "eventLogPath": "world/events/event-log.json",
+  "locations": {
+    "threshold-hall": "world/locations/threshold-hall.json",
+    "archive-hall": "world/locations/archive-hall.json",
+    "observatory": "world/locations/observatory.json",
+    "first-core": "world/locations/first-core.json"
+  },
+  "characters": {
+    "threshold-keeper": "world/characters/threshold-keeper.json"
+  }
+}
