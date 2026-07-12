@@ -1,0 +1,97 @@
+name: Lumen Codex
+
+on:
+  repository_dispatch:
+    types: [lumen_codex_task]
+
+concurrency:
+  group: lumen-codex-${{ github.event.client_payload.issue_number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  implement:
+    if: github.actor == 'u6669271834-lab'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Create isolated branch
+        id: branch
+        env:
+          ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+        run: |
+          branch="codex/lumen-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          echo "name=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Run Codex
+        id: codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: workspace-write
+          effort: medium
+          codex-args: '["--ephemeral"]'
+          allow-users: u6669271834-lab
+          output-file: /tmp/lumen-codex-final.md
+          prompt: |
+            Ты работаешь в репозитории Lumen по подтверждённой задаче Архитектора.
+            Реализуй задачу, проверь результат подходящими тестами и оставь рабочее дерево
+            только с необходимыми изменениями. Не изменяй секреты, .env-файлы,
+            .github/workflows, настройки доступа, релизы и ветку main.
+            Не выполняй merge и не публикуй релиз. Результат будет передан Архитектору
+            как отдельный pull request для ручной проверки.
+
+            Подтверждённая задача:
+            ${{ github.event.client_payload.instruction }}
+
+      - name: Enforce Lumen safety boundary
+        run: |
+          node <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const raw = execFileSync("git", ["status", "--porcelain", "-z"], { encoding: "utf8" });
+          const paths = raw.split("\0").filter(Boolean).map((line) => line.slice(3));
+          const forbidden = paths.filter((path) =>
+            path === ".gitmodules" ||
+            path.startsWith(".github/workflows/") ||
+            path.startsWith(".github/actions/") ||
+            /(^|\/)\.env(\.|$)/.test(path) ||
+            /(secret|credential|private[-_]?key)/i.test(path)
+          );
+          if (forbidden.length) {
+            console.error("Codex changed protected paths:", forbidden.join(", "));
+            process.exit(1);
+          }
+          NODE
+
+      - name: Create pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          BRANCH_NAME: ${{ steps.branch.outputs.name }}
+          FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+        run: |
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body "Codex завершил проверку, но не создал изменений.\n\n$FINAL_MESSAGE"
+            exit 0
+          fi
+
+          git config user.name "Lumen Codex"
+          git config user.email "codex@users.noreply.github.com"
+          git add -A
+          git commit -m "codex: implement Lumen task #$ISSUE_NUMBER"
+          git push --set-upstream origin "$BRANCH_NAME"
+
+          pr_url=$(gh pr create             --base main             --head "$BRANCH_NAME"             --title "Codex: Lumen task #$ISSUE_NUMBER"             --body "Автоматически подготовлено Codex после подтверждения в Lumen Control.\n\nCloses #$ISSUE_NUMBER\n\nТребуется ручная проверка Архитектора. Автоматический merge отключён.")
+
+          gh issue comment "$ISSUE_NUMBER" --body "Codex подготовил pull request: $pr_url\n\n$FINAL_MESSAGE"
