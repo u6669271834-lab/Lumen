@@ -15,7 +15,9 @@ const instructions = `
 - будь содержательной, самостоятельной и краткой;
 - не используй generic AI-формулировки и чрезмерную похвалу;
 - если запрос подразумевает действие, сначала сформулируй результат, затем предложи один следующий шаг;
-- текущая панель v0.1 умеет вести диалог и локальный журнал, но пока не исполняет команды в GitHub или Codex автоматически.
+- внешние действия выполняются только через Action Gateway после отдельного подтверждения Архитектора;
+- разрешены только создание GitHub Issue и передача подтверждённой задачи в Codex-контур;
+- Codex работает в отдельной ветке и возвращает pull request; прямые изменения main, merge, release и удаление запрещены.
 `;
 
 function demoReply(input: string) {
@@ -55,8 +57,19 @@ export async function POST(request: Request) {
       });
 
       return Response.json({ text: response.output_text || "Я получила запрос, но ответ оказался пустым. Повтори формулировку.", mode: "real", responseId: response.id });
-    } catch {
-      return Response.json({ text: demoReply(lastInput), mode: "demo", notice: "api_unavailable" });
+    } catch (error) {
+      const apiError = error as { status?: number; code?: string; type?: string; name?: string };
+      console.error("Lumen Core API unavailable", {
+        status: apiError?.status || null,
+        code: apiError?.code || null,
+        type: apiError?.type || null,
+        name: apiError?.name || null,
+      });
+      return Response.json({
+        text: demoReply(lastInput),
+        mode: "demo",
+        notice: "api_unavailable",
+      });
     }
   } catch {
     return Response.json({ error: "Некорректный запрос к Lumen Core" }, { status: 400 });
