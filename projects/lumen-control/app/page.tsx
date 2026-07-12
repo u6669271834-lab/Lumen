@@ -6,6 +6,9 @@ type Section = "cabinet" | "projects" | "production" | "store" | "archive";
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
 type Task = { id: string; title: string; stage: string; status: "active" | "waiting" | "done" };
 type EventItem = { id: string; time: string; text: string };
+type ActionName = "github.create_issue" | "codex.create_task";
+type ActionProposal = { action: ActionName; title: string; instruction: string };
+type SystemStatus = { openai: boolean; github: boolean; codex: boolean; repository: string };
 
 const nav: { id: Section; label: string; index: string }[] = [
   { id: "cabinet", label: "Кабинет", index: "01" },
@@ -18,7 +21,7 @@ const nav: { id: Section; label: string; index: string }[] = [
 const projects = [
   { code: "LUM-001", name: "Lumen", status: "Активен", progress: 64, note: "Канон и рабочее пространство" },
   { code: "LUM-002", name: "Lumen Store", status: "Запуск", progress: 38, note: "Первая коллекция промптов" },
-  { code: "LUM-003", name: "Lumen Control", status: "В сборке", progress: 46, note: "Кабинет Архитектора" },
+  { code: "LUM-003", name: "Lumen Control", status: "Подключение", progress: 72, note: "Кабинет Архитектора" },
   { code: "LUM-004", name: "Игровая студия", status: "Проектирование", progress: 18, note: "Персональные игры внутри ИИ" },
 ];
 
@@ -60,7 +63,13 @@ export default function Home() {
     { id: "e1", time: "Сейчас", text: "Lumen Control открыт" },
     { id: "e2", time: "Ранее", text: "Lumen Store v0.1 опубликован" },
   ]);
-  const [pendingAction, setPendingAction] = useState(true);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [actionName, setActionName] = useState<ActionName>("codex.create_task");
+  const [actionTitle, setActionTitle] = useState("Lumen Control: выполнить подтверждённую задачу");
+  const [actionInstruction, setActionInstruction] = useState("");
+  const [pendingAction, setPendingAction] = useState<ActionProposal | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionResult, setActionResult] = useState<{ text: string; url?: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
@@ -80,6 +89,15 @@ export default function Home() {
       setHydrated(true);
     });
     return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => { if (active) setSystemStatus(data); })
+      .catch(() => { if (active) setSystemStatus(null); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -137,9 +155,45 @@ export default function Home() {
     setInput("");
   }
 
-  function resolveAction(approved: boolean) {
-    setPendingAction(false);
-    setEvents((current) => [{ id: makeId(), time: now(), text: approved ? "Архитектор подтвердил действие" : "Действие отклонено" }, ...current].slice(0, 8));
+  function prepareAction() {
+    const title = actionTitle.trim();
+    const instruction = actionInstruction.trim();
+    if (!title || !instruction) return;
+    setPendingAction({ action: actionName, title, instruction });
+    setActionResult(null);
+    setEvents((current) => [{ id: makeId(), time: now(), text: "Действие подготовлено к подтверждению" }, ...current].slice(0, 8));
+  }
+
+  function cancelAction() {
+    setPendingAction(null);
+    setEvents((current) => [{ id: makeId(), time: now(), text: "Действие отклонено Архитектором" }, ...current].slice(0, 8));
+  }
+
+  async function confirmAction() {
+    if (!pendingAction || actionLoading) return;
+    setActionLoading(true);
+    try {
+      const response = await fetch("/api/actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...pendingAction, approved: true }),
+      });
+      const data = await response.json();
+      if (!response.ok && response.status !== 202) throw new Error(data.error || "Действие не выполнено");
+      const queued = data.status === "codex_queued";
+      const text = queued
+        ? `Codex получил задачу через Issue #${data.issueNumber}`
+        : `GitHub Issue #${data.issueNumber} создан${data.notice ? "; Codex ожидает активации workflow" : ""}`;
+      setActionResult({ text, url: data.issueUrl });
+      setEvents((current) => [{ id: makeId(), time: now(), text }, ...current].slice(0, 8));
+      setPendingAction(null);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "Внешнее действие не выполнено";
+      setActionResult({ text });
+      setEvents((current) => [{ id: makeId(), time: now(), text }, ...current].slice(0, 8));
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   return (
@@ -147,7 +201,7 @@ export default function Home() {
       <aside className="sidebar">
         <div className="brand-block">
           <span className="brand-mark">L</span>
-          <div><strong>Lumen</strong><small>Control / 0.1</small></div>
+          <div><strong>Lumen</strong><small>Control / 0.2</small></div>
         </div>
         <nav aria-label="Разделы Lumen Control">
           {nav.map((item) => (
@@ -159,6 +213,11 @@ export default function Home() {
         <div className="system-card">
           <span className={`status-light ${coreMode}`} />
           <div><strong>Lumen Core</strong><small>{coreMode === "real" ? "OpenAI подключён" : coreMode === "demo" ? "Демо-режим" : coreMode === "error" ? "Связь прервана" : "Готов к запросу"}</small></div>
+        </div>
+        <div className="connection-list" aria-label="Подключения">
+          <span className={systemStatus?.openai ? "connected" : ""}><i /> OpenAI</span>
+          <span className={systemStatus?.github ? "connected" : ""}><i /> GitHub</span>
+          <span className={systemStatus?.codex ? "connected" : ""}><i /> Codex</span>
         </div>
       </aside>
 
@@ -189,8 +248,21 @@ export default function Home() {
             </section>
 
             <aside className="right-rail">
-              <section className="panel focus-panel"><span className="overline">Текущий фокус</span><strong>Lumen Control v0.1</strong><p>Рабочий кабинет Архитектора и центральный канал управления.</p><div className="progress"><i style={{ width: "46%" }} /></div><small>46% · первое рабочее состояние</small></section>
-              {pendingAction && <section className="panel approval-panel"><span className="overline">Требуется решение</span><h3>Утвердить Brief Engine первым продуктом?</h3><p>Это изменит приоритет производственной очереди.</p><div><button type="button" onClick={() => resolveAction(false)}>Отклонить</button><button className="approve" type="button" onClick={() => resolveAction(true)}>Утвердить</button></div></section>}
+              <section className="panel focus-panel"><span className="overline">Текущий фокус</span><strong>Lumen Control v0.2</strong><p>Реальный Lumen Core и подтверждаемый контур GitHub / Codex.</p><div className="progress"><i style={{ width: "72%" }} /></div><small>72% · подключение производственного контура</small></section>
+              <section className="panel action-panel">
+                <div className="panel-title-row"><span className="overline">Action Gateway</span><span>{systemStatus?.repository || "u6669271834-lab/Lumen"}</span></div>
+                <h3>Подтверждённое действие</h3>
+                <p>Только Issue или отдельная ветка с pull request. Прямые изменения <code>main</code>, merge, release и удаление заблокированы.</p>
+                <div className="action-kind" role="group" aria-label="Тип действия">
+                  <button type="button" className={actionName === "github.create_issue" ? "active" : ""} onClick={() => setActionName("github.create_issue")}>GitHub Issue</button>
+                  <button type="button" className={actionName === "codex.create_task" ? "active" : ""} onClick={() => setActionName("codex.create_task")}>Codex → PR</button>
+                </div>
+                <input value={actionTitle} onChange={(event) => setActionTitle(event.target.value)} aria-label="Название действия" placeholder="Название задачи" />
+                <textarea value={actionInstruction} onChange={(event) => setActionInstruction(event.target.value)} aria-label="Инструкция для действия" placeholder="Что именно нужно сделать и как проверить результат?" rows={4} />
+                <button className="prepare-action" type="button" onClick={prepareAction} disabled={!actionTitle.trim() || !actionInstruction.trim()}>Подготовить к подтверждению</button>
+                {actionResult && <div className="action-result">{actionResult.text}{actionResult.url && <a href={actionResult.url} target="_blank" rel="noreferrer">Открыть ↗</a>}</div>}
+              </section>
+              {pendingAction && <section className="panel approval-panel"><span className="overline">Ожидаю решения Архитектора</span><h3>{pendingAction.title}</h3><p>{pendingAction.action === "codex.create_task" ? "Будет создан GitHub Issue и запущен Codex workflow. Результат — отдельная ветка и pull request." : "Будет создан GitHub Issue без изменения файлов."}</p><div><button type="button" onClick={cancelAction}>Отклонить</button><button className="approve" type="button" onClick={confirmAction} disabled={actionLoading}>{actionLoading ? "Выполняю…" : "Подтвердить"}</button></div></section>}
               <section className="panel event-panel"><div className="panel-title-row"><span className="overline">Журнал</span><span>последние события</span></div>{events.slice(0, 5).map((item) => <div className="event" key={item.id}><i /><p>{item.text}<small>{item.time}</small></p></div>)}</section>
             </aside>
           </div>
