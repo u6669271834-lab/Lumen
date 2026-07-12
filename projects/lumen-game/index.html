@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0c0d0c" />
+  <title>Архитектор: Первый Порог</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div>
+        <p class="system-label">Lumen World Engine</p>
+        <h1 id="world-title">Загрузка мира…</h1>
+      </div>
+      <div class="topbar-actions">
+        <span id="world-version" class="version"></span>
+        <button id="reset-button" class="ghost-button" type="button">Начать заново</button>
+      </div>
+    </header>
+
+    <main class="game-layout">
+      <section class="scene-panel" aria-live="polite">
+        <div class="scene-meta">
+          <span id="scene-eyebrow"></span>
+          <span id="cycle-status" class="cycle-status"></span>
+        </div>
+        <h2 id="scene-title"></h2>
+        <div id="scene-description" class="scene-description"></div>
+        <p id="scene-atmosphere" class="atmosphere"></p>
+        <div id="characters" class="characters"></div>
+        <div id="choices" class="choices"></div>
+        <p id="error-message" class="error-message" hidden></p>
+      </section>
+
+      <aside class="memory-panel">
+        <div class="memory-heading">
+          <div>
+            <p class="system-label">Личная память</p>
+            <h2>Журнал пути</h2>
+          </div>
+          <span id="progress" class="progress"></span>
+        </div>
+        <ol id="journal" class="journal"></ol>
+        <p class="memory-note">Журнал хранится только в этом браузере и не изменяет канон репозитория.</p>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
