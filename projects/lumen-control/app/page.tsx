@@ -2,125 +2,230 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Section = "cabinet" | "projects" | "production" | "store" | "archive";
 type ChatMessage = { id: string; role: "user" | "assistant"; content: string };
-type Task = { id: string; title: string; stage: string; status: "active" | "waiting" | "done" };
-type EventItem = { id: string; time: string; text: string };
 type ActionName = "github.create_issue" | "codex.create_task";
 type ActionProposal = { action: ActionName; title: string; instruction: string };
-type SystemStatus = { openai: boolean; github: boolean; codex: boolean; repository: string };
+type SystemStatus = {
+  openai: boolean;
+  github: boolean;
+  codex: boolean;
+  repository: string;
+  policy?: string;
+};
+type Project = {
+  code: string;
+  name: string;
+  status: string;
+  workState: "active" | "working" | "decision";
+  goal: string;
+  current: string;
+  last: string;
+  next: string;
+};
 
-const nav: { id: Section; label: string; index: string }[] = [
-  { id: "cabinet", label: "Кабинет", index: "01" },
-  { id: "projects", label: "Проекты", index: "02" },
-  { id: "production", label: "Производство", index: "03" },
-  { id: "store", label: "Lumen Store", index: "04" },
-  { id: "archive", label: "Архив", index: "05" },
-];
+type SavedState = {
+  messages: ChatMessage[];
+  decision: "recommended" | "alternative" | null;
+  acceptedResults: string[];
+  dailyBriefClosed: boolean;
+};
 
-const projects = [
-  { code: "LUM-001", name: "Lumen", status: "Активен", progress: 64, note: "Канон и рабочее пространство" },
-  { code: "LUM-002", name: "Lumen Store", status: "Запуск", progress: 38, note: "Первая коллекция промптов" },
-  { code: "LUM-003", name: "Lumen Control", status: "Подключение", progress: 72, note: "Кабинет Архитектора" },
-  { code: "LUM-004", name: "Игровая студия", status: "Проектирование", progress: 18, note: "Персональные игры внутри ИИ" },
-];
-
-const storeProducts = [
-  ["LUM-S01", "Brief Engine", "Контент", "40%"],
-  ["LUM-S02", "Inbox Navigator", "Прототип", "25%"],
-  ["LUM-S03", "GitHub Architect", "Проектирование", "15%"],
-  ["LUM-S04", "Series Architect", "Концепция", "10%"],
-];
+const STORAGE_KEY = "lumen-control-v0.2";
 
 const initialMessages: ChatMessage[] = [
   {
     id: "welcome",
     role: "assistant",
     content:
-      "Я на связи, Архитектор. Это первый рабочий контур Lumen Control. Здесь мы можем принимать решения, формировать задания и удерживать состояние проектов. Что будем двигать сейчас?",
+      "Я на связи, Архитектор. Здесь можно поставить направление обычными словами, получить проверяемый результат и передать подтверждённую техническую задачу в Codex-контур.",
   },
 ];
 
-function now() {
-  return new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit" }).format(new Date());
-}
+const projects: Project[] = [
+  {
+    code: "LUM-001",
+    name: "Lumen — цифровая студия дизайна",
+    status: "Активен",
+    workState: "active",
+    goal: "Собрать первый работающий публичный и продуктовый контур студии.",
+    current: "Уточняется единая модель управления проектами.",
+    last: "Утверждены публичное название и рабочая точка входа.",
+    next: "Свести продуктовый и операционный контуры.",
+  },
+  {
+    code: "LUM-002",
+    name: "Публичный запуск",
+    status: "Запуск",
+    workState: "working",
+    goal: "Запустить связный маршрут Instagram → Telegram → диалог.",
+    current: "Подготавливается последовательность первых публикаций.",
+    last: "Созданы публичные точки Lumen и единый аватар.",
+    next: "Подготовить первую завершённую серию материалов.",
+  },
+  {
+    code: "LUM-003",
+    name: "Lumen Store GPT",
+    status: "Тестирование",
+    workState: "working",
+    goal: "Довести закрытую версию v0.2 до критерия приёмки.",
+    current: "Ожидается полный цикл проверки замороженной версии.",
+    last: "Подготовлен протокол проверки.",
+    next: "Завершить приёмку без изменения конфигурации.",
+  },
+  {
+    code: "LUM-004",
+    name: "Lumen Workspace / Lumen Control",
+    status: "В сборке",
+    workState: "decision",
+    goal: "Создать единый понятный интерфейс Архитектора.",
+    current: "Требуется определить роль Lumen Control.",
+    last: "Подготовлена UX-модель первого экрана.",
+    next: "Утвердить единый рабочий интерфейс.",
+  },
+  {
+    code: "LUM-005",
+    name: "Система обработки заявок",
+    status: "Проектирование",
+    workState: "working",
+    goal: "Не позволять новым обращениям исчезать в переписке.",
+    current: "Определён минимальный жизненный цикл заявки.",
+    last: "Утверждены базовые статусы.",
+    next: "Собрать простой реестр и карточку обращения.",
+  },
+];
+
+const resultCards = [
+  {
+    id: "control-spec",
+    project: "Lumen Control",
+    title: "Спецификация первого рабочего экрана",
+    created: "Целостная структура главного интерфейса.",
+    checked: "Проекты, решения, результаты, проблемы и основной диалог.",
+    notDone: "Публикация и подключение постоянного серверного реестра.",
+  },
+  {
+    id: "store-protocol",
+    project: "Lumen Store GPT",
+    title: "Протокол проверки версии v0.2",
+    created: "Структура полного цикла приёмки.",
+    checked: "Критерии готовности и запрет ложных статусов.",
+    notDone: "Финальная приёмка и публикация версии.",
+  },
+];
 
 function makeId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function formatDate() {
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date());
+}
+
+function loadState(): SavedState {
+  if (typeof window === "undefined") {
+    return {
+      messages: initialMessages,
+      decision: null,
+      acceptedResults: [],
+      dailyBriefClosed: false,
+    };
+  }
+
+  try {
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    if (!saved) throw new Error("empty");
+    const parsed = JSON.parse(saved) as Partial<SavedState>;
+    return {
+      messages: Array.isArray(parsed.messages) ? parsed.messages : initialMessages,
+      decision:
+        parsed.decision === "recommended" || parsed.decision === "alternative"
+          ? parsed.decision
+          : null,
+      acceptedResults: Array.isArray(parsed.acceptedResults)
+        ? parsed.acceptedResults
+        : [],
+      dailyBriefClosed: Boolean(parsed.dailyBriefClosed),
+    };
+  } catch {
+    return {
+      messages: initialMessages,
+      decision: null,
+      acceptedResults: [],
+      dailyBriefClosed: false,
+    };
+  }
+}
+
 export default function Home() {
-  const [section, setSection] = useState<Section>("cabinet");
-  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
+  const [saved, setSaved] = useState<SavedState>({
+    messages: initialMessages,
+    decision: null,
+    acceptedResults: [],
+    dailyBriefClosed: false,
+  });
+  const [hydrated, setHydrated] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [coreMode, setCoreMode] = useState<"ready" | "real" | "demo" | "error">("ready");
-  const [tasks, setTasks] = useState<Task[]>([
-    { id: "COD-001", title: "Lumen Control v0.1", stage: "Исполнение", status: "active" },
-    { id: "PRD-001", title: "Brief Engine", stage: "Подтверждение", status: "waiting" },
-  ]);
-  const [events, setEvents] = useState<EventItem[]>([
-    { id: "e1", time: "Сейчас", text: "Lumen Control открыт" },
-    { id: "e2", time: "Ранее", text: "Lumen Store v0.1 опубликован" },
-  ]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
-  const [actionName, setActionName] = useState<ActionName>("codex.create_task");
-  const [actionTitle, setActionTitle] = useState("Lumen Control: выполнить подтверждённую задачу");
-  const [actionInstruction, setActionInstruction] = useState("");
+  const [filter, setFilter] = useState<"all" | "working" | "decision">("all");
+  const [drawer, setDrawer] = useState<null | { title: string; eyebrow: string; body: React.ReactNode }>(null);
+  const [actionDraft, setActionDraft] = useState<ActionProposal>({
+    action: "codex.create_task",
+    title: "Lumen Control v0.2: реализовать подтверждённую задачу",
+    instruction: "",
+  });
   const [pendingAction, setPendingAction] = useState<ActionProposal | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionResult, setActionResult] = useState<{ text: string; url?: string } | null>(null);
-  const [hydrated, setHydrated] = useState(false);
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [dateLabel, setDateLabel] = useState("");
+  const messageEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      const saved = window.localStorage.getItem("lumen-control-v0.1");
-      if (saved) {
-        try {
-          const state = JSON.parse(saved);
-          if (Array.isArray(state.messages)) setMessages(state.messages);
-          if (Array.isArray(state.tasks)) setTasks(state.tasks);
-          if (Array.isArray(state.events)) setEvents(state.events);
-        } catch {
-          // Keep the safe baseline when local state is damaged.
-        }
-      }
-      setHydrated(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    fetch("/api/status", { cache: "no-store" })
-      .then((response) => response.json())
-      .then((data) => { if (active) setSystemStatus(data); })
-      .catch(() => { if (active) setSystemStatus(null); });
-    return () => { active = false; };
+    const state = loadState();
+    setSaved(state);
+    setDateLabel(formatDate());
+    setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    window.localStorage.setItem("lumen-control-v0.1", JSON.stringify({ messages, tasks, events }));
-  }, [messages, tasks, events, hydrated]);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+  }, [saved, hydrated]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, loading]);
+    fetch("/api/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setSystemStatus(data))
+      .catch(() => setSystemStatus(null));
+  }, []);
 
-  const activeProject = useMemo(() => projects.find((item) => item.code === "LUM-003"), []);
+  useEffect(() => {
+    messageEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [saved.messages, loading]);
+
+  const visibleProjects = useMemo(() => {
+    if (filter === "all") return projects;
+    if (filter === "decision") return projects.filter((project) => project.workState === "decision");
+    return projects.filter((project) => project.workState === "working" || project.workState === "active");
+  }, [filter]);
+
+  const readyCount = Math.max(0, resultCards.length - saved.acceptedResults.length);
+  const decisionCount = saved.decision ? 0 : 1;
 
   async function sendMessage(event?: FormEvent) {
     event?.preventDefault();
     const clean = input.trim();
     if (!clean || loading) return;
+
     const userMessage: ChatMessage = { id: makeId(), role: "user", content: clean };
-    const nextMessages = [...messages, userMessage];
-    setMessages(nextMessages);
+    const nextMessages = [...saved.messages, userMessage];
+    setSaved((current) => ({ ...current, messages: nextMessages }));
     setInput("");
     setLoading(true);
-    setEvents((current) => [{ id: makeId(), time: now(), text: "Архитектор отправил команду" }, ...current].slice(0, 8));
 
     try {
       const response = await fetch("/api/chat", {
@@ -128,45 +233,70 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: nextMessages.slice(-12).map(({ role, content }) => ({ role, content })),
-          context: { section, activeProject: activeProject?.name, tasks },
+          context: {
+            interface: "Lumen Control v0.2",
+            projects: projects.map(({ code, name, status, next }) => ({ code, name, status, next })),
+            decision: saved.decision,
+          },
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Lumen Core недоступен");
-      setMessages((current) => [...current, { id: makeId(), role: "assistant", content: data.text }]);
-      setCoreMode(data.mode === "real" ? "real" : "demo");
-      setEvents((current) => [{ id: makeId(), time: now(), text: data.mode === "real" ? "Lumen Core ответил" : "Включён демо-ответ" }, ...current].slice(0, 8));
-    } catch {
-      setCoreMode("error");
-      setMessages((current) => [
+      setSaved((current) => ({
         ...current,
-        { id: makeId(), role: "assistant", content: "Я сохранила твою команду, но сейчас не смогла связаться с Lumen Core. Повтори отправку через минуту — локальное состояние не потеряно." },
-      ]);
+        messages: [
+          ...current.messages,
+          { id: makeId(), role: "assistant", content: data.text },
+        ],
+      }));
+    } catch {
+      setSaved((current) => ({
+        ...current,
+        messages: [
+          ...current.messages,
+          {
+            id: makeId(),
+            role: "assistant",
+            content:
+              "Я сохранила команду локально, но сейчас не смогла связаться с Lumen Core. Внешнее действие не выполнялось.",
+          },
+        ],
+      }));
     } finally {
       setLoading(false);
     }
   }
 
-  function createTaskFromInput() {
-    const title = input.trim() || "Новая задача Архитектора";
-    const task: Task = { id: `COD-${String(tasks.length + 1).padStart(3, "0")}`, title, stage: "Черновик", status: "waiting" };
-    setTasks((current) => [...current, task]);
-    setEvents((current) => [{ id: makeId(), time: now(), text: `Создан черновик ${task.id}` }, ...current].slice(0, 8));
-    setInput("");
+  function openProject(project: Project) {
+    setDrawer({
+      eyebrow: project.code,
+      title: project.name,
+      body: (
+        <>
+          <DrawerSection title="Текущая цель">{project.goal}</DrawerSection>
+          <DrawerSection title="Что происходит сейчас">{project.current}</DrawerSection>
+          <DrawerSection title="Последний подтверждённый результат">{project.last}</DrawerSection>
+          <DrawerSection title="Следующий шаг">{project.next}</DrawerSection>
+          <button
+            className="button primary"
+            type="button"
+            onClick={() => {
+              setInput(`Продолжи проект «${project.name}». Подготовь следующий проверяемый результат.`);
+              setDrawer(null);
+            }}
+          >
+            Продолжить проект
+          </button>
+        </>
+      ),
+    });
   }
 
-  function prepareAction() {
-    const title = actionTitle.trim();
-    const instruction = actionInstruction.trim();
-    if (!title || !instruction) return;
-    setPendingAction({ action: actionName, title, instruction });
+  function prepareCodexTask() {
+    const instruction = actionDraft.instruction.trim();
+    if (!instruction) return;
+    setPendingAction({ ...actionDraft, instruction });
     setActionResult(null);
-    setEvents((current) => [{ id: makeId(), time: now(), text: "Действие подготовлено к подтверждению" }, ...current].slice(0, 8));
-  }
-
-  function cancelAction() {
-    setPendingAction(null);
-    setEvents((current) => [{ id: makeId(), time: now(), text: "Действие отклонено Архитектором" }, ...current].slice(0, 8));
   }
 
   async function confirmAction() {
@@ -179,118 +309,334 @@ export default function Home() {
         body: JSON.stringify({ ...pendingAction, approved: true }),
       });
       const data = await response.json();
-      if (!response.ok && response.status !== 202) throw new Error(data.error || "Действие не выполнено");
+      if (!response.ok && response.status !== 202) {
+        throw new Error(data.error || "Внешнее действие не выполнено");
+      }
       const queued = data.status === "codex_queued";
-      const text = queued
-        ? `Codex получил задачу через Issue #${data.issueNumber}`
-        : `GitHub Issue #${data.issueNumber} создан${data.notice ? "; Codex ожидает активации workflow" : ""}`;
-      setActionResult({ text, url: data.issueUrl });
-      setEvents((current) => [{ id: makeId(), time: now(), text }, ...current].slice(0, 8));
+      setActionResult({
+        text: queued
+          ? `Codex получил подтверждённую задачу через Issue #${data.issueNumber}.`
+          : `GitHub Issue #${data.issueNumber} создан. Codex ожидает активации серверного workflow.`,
+        url: data.issueUrl,
+      });
       setPendingAction(null);
+      setActionDraft((current) => ({ ...current, instruction: "" }));
     } catch (error) {
-      const text = error instanceof Error ? error.message : "Внешнее действие не выполнено";
-      setActionResult({ text });
-      setEvents((current) => [{ id: makeId(), time: now(), text }, ...current].slice(0, 8));
+      setActionResult({
+        text: error instanceof Error ? error.message : "Внешнее действие не выполнено",
+      });
     } finally {
       setActionLoading(false);
     }
   }
 
+  function acceptResult(id: string) {
+    setSaved((current) => ({
+      ...current,
+      acceptedResults: current.acceptedResults.includes(id)
+        ? current.acceptedResults
+        : [...current.acceptedResults, id],
+    }));
+  }
+
+  const connectionIssue = !systemStatus || !systemStatus.openai || !systemStatus.github || !systemStatus.codex;
+
   return (
-    <main className="control-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
-          <span className="brand-mark">L</span>
-          <div><strong>Lumen</strong><small>Control / 0.2</small></div>
+    <main className="control-app">
+      {!saved.dailyBriefClosed && (
+        <div className="brief-overlay">
+          <section className="brief-card">
+            <span className="overline">Ежедневная сводка</span>
+            <h1>Доброе утро,<br />Архитектор.</h1>
+            <div className="brief-grid">
+              <BriefItem label="Готово">Два результата подготовлены для оценки.</BriefItem>
+              <BriefItem label="Требуется решение">Роль Lumen Control в рабочей системе.</BriefItem>
+              <BriefItem label="Подключения">
+                {connectionIssue ? "Не все серверные контуры активны." : "OpenAI, GitHub и Codex готовы."}
+              </BriefItem>
+              <BriefItem label="Главный шаг">Завершить приёмку Lumen Store GPT v0.2.</BriefItem>
+            </div>
+            <div className="button-row">
+              <button
+                className="button primary"
+                type="button"
+                onClick={() => setSaved((current) => ({ ...current, dailyBriefClosed: true }))}
+              >
+                Перейти к главному экрану
+              </button>
+            </div>
+          </section>
         </div>
-        <nav aria-label="Разделы Lumen Control">
-          {nav.map((item) => (
-            <button key={item.id} className={section === item.id ? "active" : ""} onClick={() => setSection(item.id)} type="button">
-              <span>{item.index}</span>{item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="system-card">
-          <span className={`status-light ${coreMode}`} />
-          <div><strong>Lumen Core</strong><small>{coreMode === "real" ? "OpenAI подключён" : coreMode === "demo" ? "Демо-режим" : coreMode === "error" ? "Связь прервана" : "Готов к запросу"}</small></div>
-        </div>
-        <div className="connection-list" aria-label="Подключения">
-          <span className={systemStatus?.openai ? "connected" : ""}><i /> OpenAI</span>
-          <span className={systemStatus?.github ? "connected" : ""}><i /> GitHub</span>
-          <span className={systemStatus?.codex ? "connected" : ""}><i /> Codex</span>
-        </div>
-      </aside>
+      )}
 
-      <section className="workspace">
-        <header className="topbar">
-          <div><span className="overline">Архитектурный кабинет</span><h1>{nav.find((item) => item.id === section)?.label}</h1></div>
-          <div className="top-actions"><span className="date">12 · 07 · 2026</span><button type="button" onClick={() => { setSection("cabinet"); setInput("Создай новую задачу: "); }}>＋ Новая задача</button></div>
-        </header>
-
-        {section === "cabinet" && (
-          <div className="cabinet-grid">
-            <section className="chat-panel panel">
-              <div className="panel-header"><div><span className="overline">Прямой канал</span><h2>Диалог с Lumen</h2></div><span className="live-label"><i /> активен</span></div>
-              <div className="messages" aria-live="polite">
-                {messages.map((message) => (
-                  <article className={`message ${message.role}`} key={message.id}>
-                    <span>{message.role === "assistant" ? "Lumen" : "Архитектор"}</span>
-                    <p>{message.content}</p>
-                  </article>
-                ))}
-                {loading && <article className="message assistant thinking"><span>Lumen</span><p>Собираю ответ<span className="dots">…</span></p></article>}
-                <div ref={chatEndRef} />
-              </div>
-              <form className="composer" onSubmit={sendMessage}>
-                <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} placeholder="Напиши решение, вопрос или команду…" aria-label="Сообщение для Lumen" rows={3} />
-                <div className="composer-footer"><button className="ghost" type="button" onClick={createTaskFromInput}>В задачу</button><span>Enter — отправить · Shift+Enter — строка</span><button className="send" type="submit" disabled={loading || !input.trim()}>Отправить ↗</button></div>
-              </form>
-            </section>
-
-            <aside className="right-rail">
-              <section className="panel focus-panel"><span className="overline">Текущий фокус</span><strong>Lumen Control v0.2</strong><p>Реальный Lumen Core и подтверждаемый контур GitHub / Codex.</p><div className="progress"><i style={{ width: "72%" }} /></div><small>72% · подключение производственного контура</small></section>
-              <section className="panel action-panel">
-                <div className="panel-title-row"><span className="overline">Action Gateway</span><span>{systemStatus?.repository || "u6669271834-lab/Lumen"}</span></div>
-                <h3>Подтверждённое действие</h3>
-                <p>Только Issue или отдельная ветка с pull request. Прямые изменения <code>main</code>, merge, release и удаление заблокированы.</p>
-                <div className="action-kind" role="group" aria-label="Тип действия">
-                  <button type="button" className={actionName === "github.create_issue" ? "active" : ""} onClick={() => setActionName("github.create_issue")}>GitHub Issue</button>
-                  <button type="button" className={actionName === "codex.create_task" ? "active" : ""} onClick={() => setActionName("codex.create_task")}>Codex → PR</button>
-                </div>
-                <input value={actionTitle} onChange={(event) => setActionTitle(event.target.value)} aria-label="Название действия" placeholder="Название задачи" />
-                <textarea value={actionInstruction} onChange={(event) => setActionInstruction(event.target.value)} aria-label="Инструкция для действия" placeholder="Что именно нужно сделать и как проверить результат?" rows={4} />
-                <button className="prepare-action" type="button" onClick={prepareAction} disabled={!actionTitle.trim() || !actionInstruction.trim()}>Подготовить к подтверждению</button>
-                {actionResult && <div className="action-result">{actionResult.text}{actionResult.url && <a href={actionResult.url} target="_blank" rel="noreferrer">Открыть ↗</a>}</div>}
-              </section>
-              {pendingAction && <section className="panel approval-panel"><span className="overline">Ожидаю решения Архитектора</span><h3>{pendingAction.title}</h3><p>{pendingAction.action === "codex.create_task" ? "Будет создан GitHub Issue и запущен Codex workflow. Результат — отдельная ветка и pull request." : "Будет создан GitHub Issue без изменения файлов."}</p><div><button type="button" onClick={cancelAction}>Отклонить</button><button className="approve" type="button" onClick={confirmAction} disabled={actionLoading}>{actionLoading ? "Выполняю…" : "Подтвердить"}</button></div></section>}
-              <section className="panel event-panel"><div className="panel-title-row"><span className="overline">Журнал</span><span>последние события</span></div>{events.slice(0, 5).map((item) => <div className="event" key={item.id}><i /><p>{item.text}<small>{item.time}</small></p></div>)}</section>
-            </aside>
+      <header className="control-header">
+        <div className="brand-lockup">
+          <span className="lumen-orb" aria-hidden="true" />
+          <div>
+            <span className="overline">Система Архитектора</span>
+            <strong>Lumen Control</strong>
+            <small>Проекты, решения и проверяемые результаты</small>
           </div>
-        )}
+        </div>
+        <div className="header-status">
+          <span className={`connection-chip ${systemStatus?.openai ? "connected" : ""}`}>OpenAI</span>
+          <span className={`connection-chip ${systemStatus?.github ? "connected" : ""}`}>GitHub</span>
+          <span className={`connection-chip ${systemStatus?.codex ? "connected" : ""}`}>Codex</span>
+          <span className="date-label">{dateLabel}</span>
+        </div>
+      </header>
 
-        {section === "projects" && <ProjectsView />}
-        {section === "production" && <ProductionView tasks={tasks} />}
-        {section === "store" && <StoreView />}
-        {section === "archive" && <ArchiveView />}
+      <section className="summary-grid" aria-label="Сводка состояния">
+        <SummaryStat value="5" label="активных проектов" />
+        <SummaryStat value={String(readyCount)} label="результата ждут оценки" />
+        <SummaryStat value={String(decisionCount)} label="решение ожидает вас" />
+        <SummaryStat value={connectionIssue ? "1" : "0"} label="системная проблема" />
       </section>
+
+      <div className="workspace-grid">
+        <div className="main-column">
+          <section className="panel hero-panel">
+            <span className="overline">Главный следующий шаг</span>
+            <h2>Завершить приёмку Lumen Store GPT v0.2</h2>
+            <p>
+              До окончания полного цикла проверки торговый контур нельзя считать закрытой рабочей версией. Подготовительную работу можно выполнить без публикации и изменения конфигурации.
+            </p>
+            <div className="tag-row">
+              <span className="tag blue">Тестирование</span>
+              <span className="tag green">Без внешних действий</span>
+              <span className="tag">LUM-003</span>
+            </div>
+            <div className="button-row">
+              <button
+                className="button primary"
+                type="button"
+                onClick={() => {
+                  setActionDraft({
+                    action: "codex.create_task",
+                    title: "Lumen Store GPT v0.2: завершить техническую подготовку приёмки",
+                    instruction:
+                      "Проверь актуальное состояние материалов Lumen Store GPT в репозитории. Подготовь недостающие технические артефакты для полного цикла приёмки, запусти доступные проверки и создай pull request. Не меняй публичную конфигурацию продукта и не выполняй публикацию.",
+                  });
+                  document.getElementById("execution")?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Подготовить выполнение
+              </button>
+              <button className="button" type="button" onClick={() => openProject(projects[2])}>
+                Открыть проект
+              </button>
+            </div>
+          </section>
+
+          <section className="panel section-panel">
+            <SectionHeader title="Активные проекты" subtitle="Управленческая картина без технического журнала" count="5 проектов" />
+            <div className="filter-row">
+              <button className={filter === "all" ? "filter active" : "filter"} type="button" onClick={() => setFilter("all")}>Все</button>
+              <button className={filter === "decision" ? "filter active" : "filter"} type="button" onClick={() => setFilter("decision")}>Требуют решения</button>
+              <button className={filter === "working" ? "filter active" : "filter"} type="button" onClick={() => setFilter("working")}>В работе</button>
+            </div>
+            <div className="project-list">
+              {visibleProjects.map((project) => (
+                <article className="project-card" key={project.code}>
+                  <div className="project-heading">
+                    <div>
+                      <span className="project-code">{project.code}</span>
+                      <h3>{project.name}</h3>
+                    </div>
+                    <span className={`tag ${project.workState === "decision" ? "yellow" : project.workState === "working" ? "blue" : "green"}`}>{project.status}</span>
+                  </div>
+                  <div className="project-facts">
+                    <ProjectFact label="Текущая цель">{project.goal}</ProjectFact>
+                    <ProjectFact label="Сейчас">{project.current}</ProjectFact>
+                    <ProjectFact label="Последний результат">{project.last}</ProjectFact>
+                    <ProjectFact label="Следующий шаг">{project.next}</ProjectFact>
+                  </div>
+                  <div className="project-footer">
+                    <span>{project.workState === "decision" ? "Требуется решение" : "Работа активна"}</span>
+                    <button className="text-button" type="button" onClick={() => openProject(project)}>Открыть проект →</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="panel section-panel">
+            <SectionHeader title="Готово" subtitle="Проверенные результаты, ожидающие оценки Архитектора" count={`${readyCount} ожидают`} />
+            <div className="result-list">
+              {resultCards.map((result) => {
+                const accepted = saved.acceptedResults.includes(result.id);
+                return (
+                  <article className={accepted ? "result-card accepted" : "result-card"} key={result.id}>
+                    <div className="result-heading">
+                      <div><span className="overline">{result.project}</span><h3>{result.title}</h3></div>
+                      <span className="tag green">{accepted ? "Принято" : "Проверено"}</span>
+                    </div>
+                    <p><b>Создано:</b> {result.created}</p>
+                    <p><b>Проверено:</b> {result.checked}</p>
+                    <p><b>Не выполнено:</b> {result.notDone}</p>
+                    <div className="button-row">
+                      {!accepted && <button className="button primary compact" type="button" onClick={() => acceptResult(result.id)}>Принять</button>}
+                      <button
+                        className="button compact"
+                        type="button"
+                        onClick={() => setDrawer({
+                          eyebrow: result.project,
+                          title: result.title,
+                          body: <><DrawerSection title="Создано">{result.created}</DrawerSection><DrawerSection title="Проверено">{result.checked}</DrawerSection><DrawerSection title="Ограничение">{result.notDone}</DrawerSection></>,
+                        })}
+                      >
+                        Открыть полностью
+                      </button>
+                      <button className="button compact" type="button" onClick={() => setInput(`Доработай результат «${result.title}»: `)}>Доработать</button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </div>
+
+        <aside className="side-column">
+          <section className={saved.decision ? "panel decision-panel resolved" : "panel decision-panel"}>
+            <SectionHeader title="Требуется ваше решение" subtitle="Lumen Workspace / Lumen Control" count={saved.decision ? "Принято" : "Ожидает вас"} />
+            {!saved.decision ? (
+              <>
+                <h3>Считать ли Lumen Control единственным рабочим интерфейсом?</h3>
+                <DecisionOption label="Рекомендация ИИ" recommended>
+                  Да. Остальные инструменты оставить скрытым исполнительным уровнем.
+                </DecisionOption>
+                <DecisionOption label="Альтернатива">
+                  Сохранить отдельные интерфейсы для проектов и задач.
+                </DecisionOption>
+                <p className="muted-note">Пока ничего не изменено.</p>
+                <div className="button-row vertical-mobile">
+                  <button className="button primary" type="button" onClick={() => setSaved((current) => ({ ...current, decision: "recommended" }))}>Принять рекомендацию</button>
+                  <button className="button" type="button" onClick={() => setSaved((current) => ({ ...current, decision: "alternative" }))}>Выбрать альтернативу</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="overline">Решение принято</span>
+                <h3>{saved.decision === "recommended" ? "Lumen Control утверждён как единый рабочий интерфейс." : "Сохранены отдельные интерфейсы проектов и задач."}</h3>
+                <p className="muted-note">Решение зафиксировано локально. Для записи в постоянный реестр потребуется серверное хранилище.</p>
+                <button className="button compact" type="button" onClick={() => setSaved((current) => ({ ...current, decision: null }))}>Отменить решение</button>
+              </>
+            )}
+          </section>
+
+          <section className="panel section-panel connections-panel">
+            <SectionHeader title="Состояние системы" subtitle={systemStatus?.repository || "Проверка подключений"} count={connectionIssue ? "Есть разрыв" : "Готово"} />
+            <ConnectionRow label="Главный ИИ" connected={Boolean(systemStatus?.openai)} description={systemStatus?.openai ? "OpenAI API подключён" : "Работает честный демо-ответ"} />
+            <ConnectionRow label="GitHub" connected={Boolean(systemStatus?.github)} description={systemStatus?.github ? "Сервер может создавать подтверждённые задачи" : "Нужен серверный GITHUB_TOKEN"} />
+            <ConnectionRow label="Codex" connected={Boolean(systemStatus?.codex)} description={systemStatus?.codex ? "Workflow активирован" : "Автоматизация пока не активирована"} />
+          </section>
+
+          <section className="panel execution-panel" id="execution">
+            <SectionHeader title="Исполнение" subtitle="Подтверждённая передача в GitHub / Codex" count="Одно подтверждение" />
+            <div className="action-switch">
+              <button type="button" className={actionDraft.action === "codex.create_task" ? "active" : ""} onClick={() => setActionDraft((current) => ({ ...current, action: "codex.create_task" }))}>Codex</button>
+              <button type="button" className={actionDraft.action === "github.create_issue" ? "active" : ""} onClick={() => setActionDraft((current) => ({ ...current, action: "github.create_issue" }))}>Только Issue</button>
+            </div>
+            <label className="field-label" htmlFor="action-title">Название</label>
+            <input id="action-title" value={actionDraft.title} onChange={(event) => setActionDraft((current) => ({ ...current, title: event.target.value }))} />
+            <label className="field-label" htmlFor="action-instruction">Проверяемый результат</label>
+            <textarea id="action-instruction" rows={7} value={actionDraft.instruction} onChange={(event) => setActionDraft((current) => ({ ...current, instruction: event.target.value }))} placeholder="Опишите результат обычными словами. Система создаст подтверждённую задачу, но не изменит main и не выполнит merge." />
+            <button className="button primary full" type="button" disabled={!actionDraft.title.trim() || !actionDraft.instruction.trim()} onClick={prepareCodexTask}>Подготовить подтверждение</button>
+            {actionResult && (
+              <div className="action-result">
+                <p>{actionResult.text}</p>
+                {actionResult.url && <a href={actionResult.url} target="_blank" rel="noreferrer">Открыть в GitHub →</a>}
+              </div>
+            )}
+          </section>
+        </aside>
+      </div>
+
+      <section className="chat-dock">
+        <div className="chat-stream" aria-live="polite">
+          {saved.messages.slice(-4).map((message) => (
+            <article className={`chat-message ${message.role}`} key={message.id}>
+              <span>{message.role === "assistant" ? "Lumen" : "Архитектор"}</span>
+              <p>{message.content}</p>
+            </article>
+          ))}
+          {loading && <article className="chat-message assistant"><span>Lumen</span><p>Собираю ответ…</p></article>}
+          <div ref={messageEndRef} />
+        </div>
+        <form className="main-composer" onSubmit={sendMessage}>
+          <div className="quick-row">
+            <button type="button" onClick={() => setInput("Хочу создать новую идею для Lumen: ")}>Новая идея</button>
+            <button type="button" onClick={() => setInput("Продолжи проект ")}>Продолжить проект</button>
+            <button type="button" onClick={() => setInput("Помоги принять решение по проекту ")}>Принять решение</button>
+            <button type="button" onClick={() => setInput("Проверь готовый результат проекта ")}>Проверить результат</button>
+          </div>
+          <div className="composer-row">
+            <textarea value={input} onChange={(event) => setInput(event.target.value)} rows={2} placeholder="Сообщите, что вы хотите создать, изменить, продолжить или проверить…" onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+            <button className="send-button" type="submit" disabled={!input.trim() || loading}>Отправить</button>
+          </div>
+        </form>
+      </section>
+
+      {pendingAction && (
+        <div className="confirmation-overlay">
+          <section className="confirmation-card">
+            <span className="overline">Требуется подтверждение Архитектора</span>
+            <h2>{pendingAction.title}</h2>
+            <p>{pendingAction.instruction}</p>
+            <div className="confirmation-boundary">
+              <b>Что произойдёт</b>
+              <span>{pendingAction.action === "codex.create_task" ? "Будет создан GitHub Issue и отправлен сигнал Codex workflow." : "Будет создан GitHub Issue."}</span>
+              <b>Что не произойдёт</b>
+              <span>Не будет прямого изменения main, автоматического merge или публикации.</span>
+            </div>
+            <div className="button-row">
+              <button className="button primary" type="button" disabled={actionLoading} onClick={confirmAction}>{actionLoading ? "Выполняется…" : "Подтверждаю действие"}</button>
+              <button className="button" type="button" disabled={actionLoading} onClick={() => setPendingAction(null)}>Отмена</button>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {drawer && (
+        <div className="drawer-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setDrawer(null); }}>
+          <aside className="drawer">
+            <div className="drawer-head">
+              <span className="overline">{drawer.eyebrow}</span>
+              <button type="button" aria-label="Закрыть" onClick={() => setDrawer(null)}>×</button>
+            </div>
+            <h2>{drawer.title}</h2>
+            {drawer.body}
+          </aside>
+        </div>
+      )}
     </main>
   );
 }
 
-function ProjectsView() {
-  return <section className="section-view"><div className="view-intro"><span className="overline">Карта Lumen</span><h2>Четыре активных контура</h2><p>Статусы пока рабочие, а не единая утверждённая машина переходов.</p></div><div className="project-grid">{projects.map((project) => <article className="project-card panel" key={project.code}><div><span>{project.code}</span><em>{project.status}</em></div><h3>{project.name}</h3><p>{project.note}</p><div className="progress"><i style={{ width: `${project.progress}%` }} /></div><small>{project.progress}%</small></article>)}</div></section>;
+function SummaryStat({ value, label }: { value: string; label: string }) {
+  return <div className="summary-stat"><strong>{value}</strong><span>{label}</span></div>;
 }
 
-function ProductionView({ tasks }: { tasks: Task[] }) {
-  const stages = ["Черновик", "Подтверждение", "Передача Codex", "Исполнение", "Проверка"];
-  return <section className="section-view"><div className="view-intro"><span className="overline">Производственный цикл</span><h2>От решения к результату</h2><p>Ни одно внешнее действие не проходит без видимого статуса и контрольной точки.</p></div><div className="pipeline">{stages.map((stage, index) => <div key={stage}><span>0{index + 1}</span><strong>{stage}</strong></div>)}</div><div className="task-table panel"><div className="table-row table-head"><span>Код</span><span>Задача</span><span>Этап</span><span>Статус</span></div>{tasks.map((task) => <div className="table-row" key={task.id}><span>{task.id}</span><strong>{task.title}</strong><span>{task.stage}</span><em className={task.status}>{task.status === "active" ? "В работе" : task.status === "done" ? "Готово" : "Ожидает"}</em></div>)}</div></section>;
+function SectionHeader({ title, subtitle, count }: { title: string; subtitle: string; count: string }) {
+  return <div className="section-header"><div><h2>{title}</h2><p>{subtitle}</p></div><span>{count}</span></div>;
 }
 
-function StoreView() {
-  return <section className="section-view"><div className="view-intro"><span className="overline">Lumen Store</span><h2>Первая коллекция</h2><p>Цены опубликованы как рабочие гипотезы. Реальный продукт считается готовым только после файла, инструкции и демонстрации.</p></div><div className="store-table panel">{storeProducts.map((product) => <div className="store-row" key={product[0]}><span>{product[0]}</span><strong>{product[1]}</strong><em>{product[2]}</em><div><i style={{ width: product[3] }} /></div><b>{product[3]}</b></div>)}</div><a className="external-link" href="https://lumen-store.kto-nazhal-play.chatgpt.site" target="_blank" rel="noreferrer">Открыть публичный магазин ↗</a></section>;
+function ProjectFact({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="project-fact"><b>{label}</b><span>{children}</span></div>;
 }
 
-function ArchiveView() {
-  const docs = [["CAN-001", "Канон Lumen", "Зафиксировано"], ["WS-001", "Workspace v0.1", "Актуально"], ["STR-001", "Store v0.1", "Актуально"], ["CTL-001", "Control v0.1", "В сборке"]];
-  return <section className="section-view"><div className="view-intro"><span className="overline">Архив</span><h2>Память, которой можно доверять</h2><p>Чат остаётся местом мышления. Утверждённое состояние закрепляется в каноне и GitHub.</p></div><div className="archive-list panel">{docs.map((doc) => <div key={doc[0]}><span>{doc[0]}</span><strong>{doc[1]}</strong><em>{doc[2]}</em><b>↗</b></div>)}</div><a className="external-link" href="https://github.com/u6669271834-lab/Lumen" target="_blank" rel="noreferrer">Открыть источник истины ↗</a></section>;
+function DecisionOption({ label, children, recommended = false }: { label: string; children: React.ReactNode; recommended?: boolean }) {
+  return <div className={recommended ? "decision-option recommended" : "decision-option"}><span>{label}</span><p>{children}</p></div>;
+}
+
+function ConnectionRow({ label, connected, description }: { label: string; connected: boolean; description: string }) {
+  return <div className="connection-row"><span className={connected ? "connection-light connected" : "connection-light"} /><div><b>{label}</b><small>{description}</small></div></div>;
+}
+
+function BriefItem({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="brief-item"><b>{label}</b><span>{children}</span></div>;
+}
+
+function DrawerSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="drawer-section"><h3>{title}</h3><p>{children}</p></section>;
 }
